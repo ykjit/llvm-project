@@ -326,20 +326,36 @@ public:
 
       // Load the current shadow stack pointer from the global variable.
       LoadInst *LoadedSSPtr = Builder.CreateLoad(Int8PtrTy, SSGlobal);
-
       // Assert that the allocas count match between opt/unopt main
       assert(MainAllocas.size() == UnoptMainAllocas.size() &&
              "Expected same number of allocas between opt/unopt main");
-
-      // Assert that the allocas have the same offset
-      for (size_t i = 0; i < MainAllocas.size(); i++) {
-        auto &[optAI, optOffset] = MainAllocas[i];
-        auto &[unoptAI, unoptOffset] = UnoptMainAllocas[i];
-        assert(optOffset == unoptOffset && "Alloca offsets must match");
-      }
-
       // Replace all allocas in UnoptMain with the loaded shadow stack pointer.
       rewriteAllocas(DL, UnoptMainAllocas, LoadedSSPtr);
+
+      // Validate that opt and unopt main have the same allocas.
+      // It is required to re-analyze both functions to get fresh allocas
+      // after `rewriteAllocas()` because `rewriteAllocas()` might delete
+      // the original alloca instructions after replacing them with GEPs into
+      // the shadow stack. Without re-analyzing, original allocas might have
+      // invalid references (showing as <badref>).
+      AllocaVector MainAllocasAfter;
+      std::vector<ReturnInst *> MainRetsAfter;
+      analyseFunction(*Main, DL, MainAllocasAfter, MainRetsAfter);
+
+      AllocaVector UnoptMainAllocasAfter;
+      std::vector<ReturnInst *> UnoptMainRetsAfter;
+      analyseFunction(*UnoptMain, DL, UnoptMainAllocasAfter,
+                      UnoptMainRetsAfter);
+
+      // Assert that the allocas match between opt/unopt main.
+      for (size_t i = 0; i < MainAllocasAfter.size(); i++) {
+        auto &[optAI, optOffset] = MainAllocasAfter[i];
+        auto &[unoptAI, unoptOffset] = UnoptMainAllocasAfter[i];
+
+        assert(optOffset == unoptOffset && "Alloca offsets must match");
+        assert(optAI->getAllocatedType() == unoptAI->getAllocatedType() &&
+               "Alloca types must match");
+      }
     }
   }
 
